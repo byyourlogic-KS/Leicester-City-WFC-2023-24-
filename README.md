@@ -1,2 +1,1 @@
-# Leicester-City-WFC-2023-24-
-This is performance tracker dashboard built as part of my portfolio using StatsBomb Event Data from top 5 Women's Football/Soccer Leagues around the globe. 
+This is Leicester City's 2023/2024 dashboard prototype created on Shiny (R). This dashboard covers team analysis, player analysis, alongside with match report, player comparisons and similar players. Data Viz are in the map section. The prototype is built for practice for portfolio which will be used for showing teams and recruiters on how I can build a dashboard if it is large scale or small scale based with whatever data that is collected or given.
