@@ -264,6 +264,11 @@ radar_overlay <- function(va, vb, na, nb) {
     geom_text(data = lab, aes(x, y, label = l), size = 3.8, colour = BRAND$dark, lineheight = 0.9) + scale_fill_manual(values = cols, name = NULL) + scale_colour_manual(values = cols, name = NULL) +
     coord_fixed(xlim = c(-1.6, 1.6), ylim = c(-1.45, 1.45)) + theme_void(base_size = 13, base_family = FONT_BODY) + theme(legend.position = "bottom")
 }
+CMP_META <- {
+  d <- M %>% filter(pos_group %in% GROUPS, minutes > 0)
+  tibble(key = paste(d$league, d$player.id, sep = "|"), pos_group = d$pos_group, minutes = d$minutes, league = d$league, player.id = d$player.id)
+}
+role_family <- function(g) ifelse(g %in% c("AM", "W"), "AM/W", g)   # wingers and attacking midfielders are compared together
 # Segmented "pill" toggle: a radio group styled by CSS (.pill-radio)
 pills <- function(inputId, label, choices, selected = NULL) {
   tagAppendAttributes(radioButtons(inputId, label, choices, selected = selected, inline = TRUE), class = "pill-radio")
@@ -376,7 +381,7 @@ GLOSS <- list(
   list(g = "Ratings and reading the charts", t = "Reliability (tiers A to D)", d = "How much of the difference between players is real skill or role rather than luck.",
        b = "1 minus the average luck variance divided by the variance seen across players in the same position group, with luck from a Poisson or binomial model. Tier A is 0.8 or more, B 0.6 to 0.8, C 0.4 to 0.6, D below 0.4. This is an upper bound. xT and VAEP sums are not assessed yet. The signal-versus-noise idea is inspired by work on metric stability and discrimination, but it is not an exact copy of that method.", r = 17),
   list(g = "Ratings and reading the charts", t = "Minutes-adjusted score", d = "A score pulled gently towards average when a player has played little.", b = "50 + (score - 50) x minutes / (minutes + 600). This is a rule of thumb in the spirit of shrinkage estimators; the 600 is chosen, not fitted.", r = 11),
-  list(g = "Ratings and reading the charts", t = "Overall (on the key player cards)", d = "A quick summary, not a verdict.", b = "The average of the player's available area bars. It says nothing about how important the areas are for the position."),
+  list(g = "Ratings and reading the charts", t = "Best area (on the key player cards)", d = "The area where the player ranks highest against positional peers, shown as a percentile (81% means better than 81% of players in the same position group).", b = "The highest of the player's area bars. The three best areas are listed under it. The cards no longer show an average of all areas, because an average hides big differences between areas."),
   list(g = "Ratings and reading the charts", t = "Network centrality", d = "How much of the team's passing runs through a player.", b = "PageRank on the graph of completed open play passes between teammates, scaled so the most central player is 100. The method comes from web search and has been used to study football passing networks.", r = c(8, 9)),
   list(g = "Ratings and reading the charts", t = "xG build-up (xGBuildup)", d = "Not used in this dashboard.", b = "Public sites commonly define it as the xG of the moves a player takes part in, excluding the player's own shots and assists. The closest idea here is deep zone involvement.")
 )
@@ -648,6 +653,7 @@ ui <- page_navbar(
     .cmp-share { display: flex; justify-content: flex-end; margin: 2px 0 6px; }
     .mr-side { text-align: center; min-width: 170px; } .mr-team { font-family: '", FONT_HEAD, "', sans-serif; font-size: 22px; font-weight: 700; margin-top: 6px; } .mr-xg { color: #DCE6F6; font-size: 14px; }
     .mr-score { font-family: '", FONT_HEAD, "', sans-serif; font-size: 64px; font-weight: 700; line-height: 1; letter-spacing: .04em; }
+    .cmp-any { grid-column: 1 / -1; font-size: 12.5px; color: #6A7185; margin-top: -8px; }
     .btn-share { white-space: nowrap; flex: none; background: ", BRAND$accent, "; color: ", BRAND$primary, "; border: 0; border-radius: 999px; font-weight: 700; padding: 8px 18px; letter-spacing: .02em; }
     .btn-share:hover { background: #F0AE00; color: ", BRAND$primary, "; }
     .form-check-input:checked { background-color: ", BRAND$primary, "; border-color: ", BRAND$primary, "; }
@@ -808,14 +814,17 @@ ui <- page_navbar(
   nav_panel("Compare",
     div(class = "cmp-pickers",
         selectizeInput("cmpA", "Player A (blue)", choices = NULL, options = list(placeholder = "Search any player", dropdownParent = "body")),
-        selectizeInput("cmpB", "Player B (gold)", choices = NULL, options = list(placeholder = "Search any player", dropdownParent = "body"))),
+        selectizeInput("cmpB", "Player B (gold)", choices = NULL, options = list(placeholder = "Search any player", dropdownParent = "body")),
+        div(class = "cmp-any", checkboxInput("cmp_any", "Allow players from other positions (percentiles are within each position group, so read the gaps with care)", FALSE))),
     div(class = "cmp-share", downloadButton("dl_cmp", "Share comparison as image", class = "btn-share")),
     uiOutput("cmp_head"),
     layout_columns(fill = FALSE, col_widths = breakpoints(sm = 12, xl = c(5, 7)),
       card(fill = FALSE, card_header("Profile shape"), plotOutput("cmp_radar", height = 460)),
       card(fill = FALSE, card_header("Area scores, side by side"), plotOutput("cmp_fly", height = 460))),
-    card(fill = FALSE, card_header("Head to head on the headline KPIs"), plotOutput("cmp_dumb", height = 800),
-         helpText("Percentiles within each player's own position group. Low-reliability KPIs are left out.")),
+    div(class = "tp-bar", pills("cmp_basis", "View", c("Percentiles" = "pct", "Values" = "raw")), pills("cmp_padj", "Defending counts", c("Possession adjusted (PAdj)" = "padj", "Raw counts" = "raw")), pills("cmp_vol", "Volume", c("Per 90" = "p90", "Total" = "tot")),
+        div(class = "tp-note", "Percentiles are always against the player's position group and are calculated from possession adjusted counts. \"Defending counts\" and \"Volume\" change the values shown in the Values chart and the numbers table. Raw counts exist for tackles, interceptions, recoveries, clearances and blocks; every other KPI is unchanged. Rate KPIs (completion %, shares, the defensive index) have no total, so they stay as rates.")),
+    card(fill = FALSE, card_header(textOutput("cmp_dumb_title")), plotOutput("cmp_dumb", height = 1500),
+         helpText("Position adjusted: percentiles within each player's own position group. Raw: the actual numbers, each KPI on its own scale. Low-reliability KPIs are left out. Defending counts are possession adjusted.")),
     card(fill = FALSE, card_header("The numbers"), DTOutput("cmp_tbl", fill = FALSE)),
     card(fill = FALSE, card_header("Where they play"), pills("cmp_map", "Map", c("Touch heatmap" = "heat", "Shot map" = "shot", "Progressive actions" = "prog")),
          layout_columns(fill = FALSE, col_widths = breakpoints(sm = 12, lg = c(6, 6)), plotOutput("cmp_map_a", height = 600), plotOutput("cmp_map_b", height = 600)))),
@@ -856,8 +865,9 @@ server <- function(input, output, session) {
     req(input$team, input$league)
     M %>% filter(league == input$league, team == input$team) %>% arrange(desc(minutes))
   })
-  observeEvent(squad(), {
-    sq2 <- squad() %>% filter(pos_group %in% GROUPS)
+  observeEvent(list(squad(), input$player), {
+    req(input$player); me <- squad() %>% filter(as.character(player.id) == input$player); req(nrow(me) == 1)
+    sq2 <- squad() %>% filter(pos_group %in% GROUPS, role_family(pos_group) == role_family(me$pos_group), player.id != me$player.id)
     updateSelectInput(session, "cmp", choices = c("Pool average (50th percentile)" = "pool",
       setNames(as.character(sq2$player.id), paste0(sq2$player, " (", sq2$pos_group, ")"))))
   })
@@ -1068,10 +1078,17 @@ server <- function(input, output, session) {
   observeEvent(sel(), {
     p <- sel(); if (nrow(p) == 1 && p$pos_group %in% GROUPS) updateSelectizeInput(session, "cmpA", choices = CMP_CHOICES, selected = paste(p$league, p$player.id, sep = "|"), server = TRUE)
   })
-  observeEvent(input$cmpA, {
-    req(nzchar(input$cmpA)); if (nzchar(input$cmpB %||% "")) return()
-    a <- get_pl(input$cmpA); cand <- M %>% filter(league == a$league, pos_group == a$pos_group, player.id != a$player.id, minutes >= 450) %>% arrange(desc(minutes)) %>% head(1)
-    if (nrow(cand) == 1) updateSelectizeInput(session, "cmpB", choices = CMP_CHOICES, selected = paste(cand$league, cand$player.id, sep = "|"), server = TRUE)
+  # Player B can only be from the same role as Player A unless the tick box is on (wingers and attacking midfielders count as one role)
+  observeEvent(list(input$cmpA, input$cmp_any), {
+    req(nzchar(input$cmpA %||% "")); a <- get_pl(input$cmpA); req(nrow(a) == 1)
+    ok_keys <- if (isTRUE(input$cmp_any)) CMP_META$key else CMP_META$key[role_family(CMP_META$pos_group) == role_family(a$pos_group)]
+    ch <- CMP_CHOICES[CMP_CHOICES %in% ok_keys]; cur <- input$cmpB %||% ""
+    keep <- nzchar(cur) && cur %in% ch && cur != input$cmpA
+    sel_b <- if (keep) cur else {
+      cand <- M %>% filter(league == a$league, role_family(pos_group) == role_family(a$pos_group), player.id != a$player.id, minutes >= 450) %>% arrange(desc(minutes)) %>% head(1)
+      if (nrow(cand) == 1) paste(cand$league, cand$player.id, sep = "|") else ""
+    }
+    updateSelectizeInput(session, "cmpB", choices = ch, selected = sel_b, server = TRUE)
   })
   cmp_a <- reactive({ req(nzchar(input$cmpA %||% "")); p <- get_pl(input$cmpA); req(nrow(p) == 1); p })
   cmp_b <- reactive({ req(nzchar(input$cmpB %||% "")); p <- get_pl(input$cmpB); req(nrow(p) == 1); p })
@@ -1082,8 +1099,7 @@ server <- function(input, output, session) {
     pa <- cmp_a(); pb <- cmp_b(); ba <- cmp_bars(cmp_pa()); bb <- cmp_bars(cmp_pb())
     card_of <- function(p, b, cls) div(class = paste("cmp-card", cls), photo_tag(p$player.id, p$player, size = 76, team = p$team),
       div(div(class = "cmp-name", p$player), div(style = "margin:2px 0;", crest_tag(p$team, 26)), div(class = "cmp-meta", paste0(unname(GROUP_NAMES[p$pos_group]), "  |  ", team_display(p$team), "  |  ", p$league)),
-          div(class = "cmp-meta", paste0(round(p$minutes), " min  |  ", p$matches, " matches"))),
-      div(class = "cmp-ovr", div(class = "n", if (all(is.na(b))) "n/a" else sprintf("%.0f", mean(b, na.rm = TRUE))), div(class = "l", "Overall")))
+          div(class = "cmp-meta", paste0(round(p$minutes), " min  |  ", p$matches, " matches"))))
     div(class = "cmp-head", card_of(pa, ba, "cmp-a"), div(class = "cmp-vs", "VS"), card_of(pb, bb, "cmp-b"),
         if (pa$pos_group != pb$pos_group) div(class = "cmp-note", "Different position groups: each player's percentiles are against their own position group, so read the gaps with care."))
   })
@@ -1125,26 +1141,68 @@ server <- function(input, output, session) {
     db <- cmp_pb()$d %>% filter(role == "headline") %>% select(key, vb = value, pb = pct)
     da %>% inner_join(db, by = "key") %>% mutate(domain = factor(as.character(domain), levels = DOM$domain)) %>% arrange(domain)
   })
+  # raw value in the chosen volume: totals only for per 90 KPIs (value x minutes / 90); rates stay rates
+  cmp_conv <- function(key, v, minutes) if (identical(input$cmp_vol, "tot")) ifelse(grepl("_p90$", key), v * minutes / 90, v) else v
+  cmp_unit <- function(key) if (identical(input$cmp_vol, "tot") && grepl("_p90$", key)) " (total)" else if (grepl("_p90$", key)) " (per 90)" else " (rate)"
+  RAWMAP <- c(tackles_int_p90 = "tackles_int_raw_p90", recoveries_p90 = "recoveries_raw_p90", clearances_p90 = "clearances_raw_p90", blocks_p90 = "blocks_raw_p90",
+              tackles_won_p90 = "tackles_won_raw_p90", dribbled_past_p90 = "dribbled_past_raw_p90")
+  raw_def <- reactive({ f <- "data/defending_raw.csv"; if (file.exists(f)) read.csv(f, check.names = FALSE, stringsAsFactors = FALSE) else NULL })
+  use_raw <- reactive(identical(input$cmp_padj, "raw") && !is.null(raw_def()))
+  raw_p90 <- function(p, key) { rd <- raw_def(); r <- rd[rd$league == p$league & rd$player.id == p$player.id, ]; if (nrow(r) == 1) r[[RAWMAP[[key]]]] else NA_real_ }
+  cmp_vals <- function(d) {
+    A <- d$va; B <- d$vb
+    if (use_raw()) { m <- d$key %in% names(RAWMAP); A[m] <- vapply(d$key[m], function(k) raw_p90(cmp_a(), k), numeric(1)); B[m] <- vapply(d$key[m], function(k) raw_p90(cmp_b(), k), numeric(1)) }
+    list(A = cmp_conv(d$key, A, cmp_a()$minutes), B = cmp_conv(d$key, B, cmp_b()$minutes))
+  }
+  cmp_lab <- function(d) if (use_raw()) ifelse(d$key %in% names(RAWMAP), sub("\\(PAdj\\)", "(raw)", d$label), d$label) else d$label
+  output$cmp_dumb_title <- renderText(if (identical(input$cmp_basis, "raw")) paste0("Head to head on the headline KPIs: values, ", if (identical(input$cmp_vol, "tot")) "season totals" else "per 90", if (use_raw()) ", raw defending counts" else ", possession adjusted defending") else "Head to head on the headline KPIs: percentiles within position group")
   output$cmp_dumb <- renderPlot({
-    nm_a <- cmp_a()$player; nm_b <- cmp_b()$player; d <- cmp_join() %>% filter(!is.na(pa), !is.na(pb)); req(nrow(d) > 0)
-    d$domain_label <- factor(d$domain_label, levels = DOM$domain_label); d$id <- factor(seq_len(nrow(d)), levels = rev(seq_len(nrow(d))))
-    pts <- bind_rows(tibble(id = d$id, domain_label = d$domain_label, pct = d$pa, who = nm_a), tibble(id = d$id, domain_label = d$domain_label, pct = d$pb, who = nm_b))
-    pts$who <- factor(pts$who, levels = c(nm_a, nm_b))
-    ggplot(d) + geom_vline(xintercept = 50, colour = BRAND$muted, linetype = "dashed") +
-      geom_segment(aes(x = pa, xend = pb, y = id, yend = id), colour = BRAND$muted, linewidth = 1.6) + geom_point(data = pts, aes(pct, id, colour = who), size = 4.2) +
-      scale_colour_manual(values = setNames(c(BRAND$primary, BRAND$accent), c(nm_a, nm_b)), name = NULL) +
-      scale_x_continuous(limits = c(0, 100), breaks = c(0, 25, 50, 75, 100)) + scale_y_discrete(labels = setNames(d$label, d$id)) +
-      facet_grid(domain_label ~ ., scales = "free_y", space = "free_y", switch = "y") + labs(x = "Percentile", y = NULL) + theme_lcw(base_size = 13) +
-      theme(strip.placement = "outside", strip.text.y.left = element_text(angle = 0, hjust = 0, face = "bold", colour = BRAND$primary), panel.grid.major.y = element_blank(),
-            panel.grid.minor = element_blank(), legend.position = "top", axis.text.y = element_text(colour = BRAND$dark), panel.spacing.y = unit(0.6, "lines"))
+    nm_a <- cmp_a()$player; nm_b <- cmp_b()$player; d <- cmp_join(); req(nrow(d) > 0)
+    cols <- setNames(c(BRAND$primary, BRAND$accent), c(nm_a, nm_b))
+    if (identical(input$cmp_basis, "raw")) {
+      d <- d %>% filter(!is.na(va) | !is.na(vb)); ma <- cmp_a()$minutes; mb <- cmp_b()$minutes
+      v <- cmp_vals(d); d$A <- v$A; d$B <- v$B
+      d$lab <- paste0(cmp_lab(d), ifelse(grepl("_p90$", d$key), if (identical(input$cmp_vol, "tot")) " (total)" else " (per 90)", ""))
+      d$lab <- factor(d$lab, levels = unique(d$lab))
+      long <- bind_rows(tibble(lab = d$lab, v = d$A, who = nm_a, key = d$key), tibble(lab = d$lab, v = d$B, who = nm_b, key = d$key)); long$who <- factor(long$who, levels = c(nm_a, nm_b))
+      long$txt <- vapply(seq_len(nrow(long)), function(i) fmt_val(long$key[i], long$v[i]), character(1))
+      ggplot(long, aes(v, who, fill = who)) + geom_vline(xintercept = 0, colour = BRAND$dark, linewidth = 0.4) + geom_col(width = 0.7) +
+        geom_label(aes(label = txt, hjust = ifelse(v >= 0, -0.1, 1.1)), size = 3.4, fontface = "bold", colour = BRAND$dark, fill = alpha("white", 0.85), label.size = 0, label.padding = unit(0.12, "lines"), show.legend = FALSE) +
+        scale_fill_manual(values = cols, name = NULL) + scale_x_continuous(expand = expansion(mult = 0.32)) + scale_y_discrete(labels = NULL, limits = rev) + expand_limits(x = 0) +
+        facet_wrap(~lab, scales = "free_x", ncol = 3, labeller = label_wrap_gen(26)) + labs(x = NULL, y = NULL, subtitle = "Bars start at zero, so lengths are honest. Each KPI has its own scale.") + theme_lcw(base_size = 12) +
+        theme(strip.text = element_text(face = "bold", colour = BRAND$primary, size = 10.5, lineheight = 0.95), panel.grid.major.y = element_blank(), panel.grid.minor = element_blank(), axis.text.y = element_blank(),
+              axis.text.x = element_blank(), axis.ticks = element_blank(), panel.grid.major.x = element_blank(), legend.position = "top", panel.spacing = unit(1.1, "lines"))
+    } else {
+      d <- d %>% filter(!is.na(pa), !is.na(pb)); req(nrow(d) > 0)
+      d$domain_label <- factor(d$domain_label, levels = DOM$domain_label); d$id <- factor(seq_len(nrow(d)), levels = rev(seq_len(nrow(d))))
+      pts <- bind_rows(tibble(id = d$id, domain_label = d$domain_label, pct = d$pa, who = nm_a), tibble(id = d$id, domain_label = d$domain_label, pct = d$pb, who = nm_b))
+      pts$who <- factor(pts$who, levels = c(nm_a, nm_b))
+      ggplot(d) + geom_vline(xintercept = 50, colour = BRAND$muted, linetype = "dashed") +
+        geom_segment(aes(x = pa, xend = pb, y = id, yend = id), colour = BRAND$muted, linewidth = 1.6) + geom_point(data = pts, aes(pct, id, colour = who), size = 4.2) +
+        scale_colour_manual(values = cols, name = NULL) +
+        scale_x_continuous(limits = c(0, 100), breaks = c(0, 25, 50, 75, 100)) + scale_y_discrete(labels = setNames(d$label, d$id)) +
+        facet_grid(domain_label ~ ., scales = "free_y", space = "free_y", switch = "y") + labs(x = "Percentile", y = NULL) + theme_lcw(base_size = 13) +
+        theme(strip.placement = "outside", strip.text.y.left = element_text(angle = 0, hjust = 0, face = "bold", colour = BRAND$primary), panel.grid.major.y = element_blank(),
+              panel.grid.minor = element_blank(), legend.position = "top", axis.text.y = element_text(colour = BRAND$dark), panel.spacing.y = unit(0.6, "lines"))
+    }
   })
   output$cmp_tbl <- renderDT({
-    d <- cmp_join(); req(nrow(d) > 0); a <- cmp_a()$player; b <- cmp_b()$player
-    t <- tibble(Area = d$domain_label, KPI = d$label, A = fmt_val(d$key, d$va), `A pct` = round(d$pa), B = fmt_val(d$key, d$vb), `B pct` = round(d$pb),
-                Edge = ifelse(is.na(d$pa) | is.na(d$pb), "", ifelse(d$pa - d$pb >= 10, "A", ifelse(d$pb - d$pa >= 10, "B", "even"))))
-    names(t)[3:6] <- c(a, paste(a, "pct"), b, paste(b, "pct"))
-    datatable(t, rownames = FALSE, class = "compact stripe", options = list(dom = "t", pageLength = 60, ordering = TRUE, scrollY = "460px", paging = FALSE)) %>%
-      formatStyle(c(4, 6), backgroundColor = styleInterval(c(25, 50, 75), c("#FBDF85", "#FEF1C7", "#DCE6F6", "#A9C0E8")))
+    d <- cmp_join(); req(nrow(d) > 0); a <- cmp_a()$player; b <- cmp_b()$player; raw <- identical(input$cmp_basis, "raw")
+    v <- cmp_vals(d); d <- d %>% mutate(A = v$A, B = v$B, unit = vapply(key, cmp_unit, character(1)), label = cmp_lab(d))
+    t <- if (raw) {
+      tibble(Area = d$domain_label, KPI = paste0(d$label, d$unit), A = vapply(seq_len(nrow(d)), function(i) fmt_val(d$key[i], d$A[i]), character(1)), B = vapply(seq_len(nrow(d)), function(i) fmt_val(d$key[i], d$B[i]), character(1)),
+             `B minus A` = ifelse(is.na(d$A) | is.na(d$B), "", vapply(seq_len(nrow(d)), function(i) fmt_num(d$B[i] - d$A[i]), character(1))),
+             `B vs A (%)` = ifelse(is.na(d$A) | is.na(d$B) | d$A == 0, "", sprintf("%+.0f%%", 100 * (d$B - d$A) / abs(d$A))))
+    } else {
+      tibble(Area = d$domain_label, KPI = paste0(d$label, d$unit), A = vapply(seq_len(nrow(d)), function(i) fmt_val(d$key[i], d$A[i]), character(1)), `A pct` = round(d$pa),
+             B = vapply(seq_len(nrow(d)), function(i) fmt_val(d$key[i], d$B[i]), character(1)), `B pct` = round(d$pb),
+             Edge = ifelse(is.na(d$pa) | is.na(d$pb), "", ifelse(d$pa - d$pb >= 10, "A", ifelse(d$pb - d$pa >= 10, "B", "even"))))
+    }
+    names(t)[names(t) == "A"] <- a; names(t)[names(t) == "B"] <- b; names(t)[names(t) == "A pct"] <- paste(a, "pct"); names(t)[names(t) == "B pct"] <- paste(b, "pct")
+    names(t)[names(t) == "B minus A"] <- paste(b, "minus", a); names(t)[names(t) == "B vs A (%)"] <- paste(b, "vs", a, "(%)")
+    dt <- datatable(t, rownames = FALSE, class = "compact stripe", options = list(dom = "t", pageLength = 60, ordering = TRUE, scrollY = "460px", paging = FALSE))
+    if (!raw) dt <- dt %>% formatStyle(c(4, 6), backgroundColor = styleInterval(c(25, 50, 75), c("#FBDF85", "#FEF1C7", "#DCE6F6", "#A9C0E8")))
+    dt
   })
   cmp_map_plot <- function(p, type, cols) {
     mp <- get_maps(p$league); validate(need(!is.null(mp), "Maps data not found for this league."))
@@ -1189,12 +1247,12 @@ server <- function(input, output, session) {
     cards <- lapply(seq_len(nrow(sq)), function(i) {
       p <- sq[i, ]; b <- bars_from(build_profile(p, input$merge, pool_leagues(), input$min_min)$d)
       b <- b %>% mutate(domain = as.character(domain)) %>% left_join(DOM %>% mutate(domain = as.character(domain)), by = "domain") %>% filter(!is.na(bar)) %>% arrange(desc(bar))
-      overall <- if (nrow(b)) mean(b$bar) else NA_real_; top <- head(b, 3)
+      top <- head(b, 3)
       rows <- lapply(seq_len(nrow(top)), function(j) div(class = "r", span(top$domain_label[j]), div(class = "bar", div(class = "fill", style = sprintf("width:%d%%;", round(top$bar[j]))), div(class = "tick")), span(class = "v", sprintf("%.0f", top$bar[j]))))
       div(class = "key-card", onclick = sprintf("Shiny.setInputValue('key_pick', '%s', {priority: 'event'});", p$player.id),
           div(class = "key-top", photo_tag(p$player.id, p$player, size = 76, team = p$team),
               div(div(class = "key-name", p$player), div(class = "key-meta", paste0(unname(GROUP_NAMES[p$pos_group]), "  |  ", round(p$minutes), " min  |  ", p$matches, " matches"))),
-              div(class = "key-overall", div(class = "n", if (is.na(overall)) "n/a" else sprintf("%.0f", overall)), div(class = "l", "Overall"))),
+              div(class = "key-overall", title = "Best area, as a percentile against players in the same position group", div(class = "n", if (!nrow(top)) "n/a" else sprintf("%.0f%%", top$bar[1])), div(class = "l", if (!nrow(top)) "" else paste0("Best: ", top$domain_label[1])))),
           div(class = "key-sub", "Best areas vs positional peers"), div(class = "key-rows", rows))
     })
     div(class = "key-grid", cards)
